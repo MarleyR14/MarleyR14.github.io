@@ -28,7 +28,8 @@
     .hud { margin-top:10px; display:flex; justify-content:space-between; align-items:center; color:var(--muted); font-size:14px; }
     .score { font-size: clamp(24px, 6vw, 42px); font-weight:800; letter-spacing:.08em; color:var(--fg); text-shadow:0 0 18px rgba(102,226,163,.25); }
     .kbd { background:#101820; border:1px solid #243142; border-bottom-width:3px; padding:.15rem .35rem; border-radius:6px; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; color:#c9d7ee; }
-    .toast { position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
+    .toast { position:absolute; inset:0; display:none; place-items:center; pointer-events:none; }
+    .toast.show { display:grid; }
     .toast > div { background:rgba(4,8,12,.72); padding:16px 20px; border:1px solid #243142; border-radius:14px; backdrop-filter: blur(6px); }
     a { color:var(--accent); text-decoration:none; }
   </style>
@@ -65,7 +66,7 @@
       <div>Press <span class="kbd">Space</span> to pause • <span class="kbd">R</span> to reset</div>
     </div>
 
-    <div class="toast" id="toast" hidden>
+    <div class="toast" id="toast">
       <div id="toastText"></div>
     </div>
   </div>
@@ -226,21 +227,34 @@
     rightScore = full ? 0 : rightScore;
     hitCount = 0;
     gameOver = false;
+    paused = false; // Reset paused state
     left.w = PADDLE_W(); left.h = PADDLE_H(); right.w = PADDLE_W(); right.h = PADDLE_H();
     left.speed = right.speed = 620;
     particles.length = 0;
     centerPaddles();
     serve(randSign());
-    hideToast();
+    hideToast(); // Ensure toast is hidden on reset
   }
 
   function togglePause(){
+    if (gameOver) return; // Don't allow pausing when game is over
     paused = !paused;
-    if (paused) showToast('Paused'); else hideToast();
+    if (paused) {
+      showToast('Paused');
+    } else {
+      hideToast();
+    }
   }
 
-  function showToast(text){ toastText.textContent = text; toast.hidden = false; }
-  function hideToast(){ toast.hidden = true; }
+  function showToast(text){ 
+    toastText.textContent = text; 
+    toast.classList.add('show');
+  }
+  
+  function hideToast(){ 
+    toast.classList.remove('show');
+    toastText.textContent = ''; // Clear the text content too
+  }
 
   // CPU logic
   function rectCircleCollide(rx, ry, rw, rh, cx, cy, cr){
@@ -377,14 +391,17 @@
   function scorePoint(lastDir){
     SFX.score.play();
     if (leftScore >= targetScore || rightScore >= targetScore) {
-      gameOver = true; showToast(`${leftScore>rightScore? 'Left' : 'Right'} player wins!`); return;
+      gameOver = true; 
+      showToast(`${leftScore>rightScore? 'Left' : 'Right'} player wins!`); 
+      return;
     }
     hitCount = 0; // reset acceleration count
     centerPaddles();
     serve(-lastDir); // serve toward player who was scored on
   }
 
-  // Init
+  // Init - Make sure toast is hidden initially
+  hideToast();
   reset(true);
   requestAnimationFrame(loop);
 })();
