@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pong Replica</title>
+  <title>Online Multiplayer Pong</title>
   <style>
     :root {
       --bg:#0b0f14; --fg:#e8f0ff; --accent:#66e2a3; --muted:#5b7188;
@@ -18,8 +18,9 @@
     header { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin: 12px 0; }
     h1 { font-size:clamp(18px, 3vw, 24px); letter-spacing:.04em; margin:0; color:var(--fg); }
     .controls { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
-    button, select { background:#121a24; color:var(--fg); border:1px solid #263242; padding:.5rem .8rem; border-radius:12px; cursor:pointer; font-weight:600; }
+    button, select, input { background:#121a24; color:var(--fg); border:1px solid #263242; padding:.5rem .8rem; border-radius:12px; cursor:pointer; font-weight:600; }
     button:hover { border-color:#33475e; }
+    button:disabled { opacity:0.5; cursor:not-allowed; }
     .pill { font-size:12px; color:var(--muted); }
     canvas { width:100%; height:auto; display:block; border-radius:18px; box-shadow:0 10px 30px rgba(0,0,0,.45); background:
       linear-gradient(transparent 49.5%, rgba(255,255,255,.15) 49.5%, rgba(255,255,255,.15) 50.5%, transparent 50.5%),
@@ -31,18 +32,26 @@
     .toast { position:absolute; inset:0; display:none; place-items:center; pointer-events:none; }
     .toast.show { display:grid; }
     .toast > div { background:rgba(4,8,12,.72); padding:16px 20px; border:1px solid #243142; border-radius:14px; backdrop-filter: blur(6px); }
+    .multiplayer-setup { background:#121a24; border:1px solid #263242; padding:1.5rem; border-radius:16px; margin:1rem 0; }
+    .connection-info { display:flex; gap:1rem; align-items:center; flex-wrap:wrap; }
+    .status { padding:.25rem .5rem; border-radius:8px; font-size:12px; font-weight:600; }
+    .status.disconnected { background:#ff4444; color:white; }
+    .status.connecting { background:#ffaa44; color:white; }
+    .status.connected { background:#44ff44; color:black; }
     a { color:var(--accent); text-decoration:none; }
+    #gameId { font-family:ui-monospace, monospace; letter-spacing:0.1em; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <header>
-      <h1>Pong Replica</h1>
+      <h1>Online Multiplayer Pong</h1>
       <div class="controls">
         <label class="pill">Mode:
           <select id="mode">
             <option value="cpu">1P vs CPU</option>
-            <option value="pvp">2 Players</option>
+            <option value="pvp">2P Local</option>
+            <option value="online">Online Multiplayer</option>
           </select>
         </label>
         <label class="pill">Target Score:
@@ -56,6 +65,19 @@
         <button id="btnReset">Reset</button>
       </div>
     </header>
+
+    <div class="multiplayer-setup" id="multiplayerSetup" style="display:none;">
+      <div class="connection-info">
+        <button id="btnHost">Host Game</button>
+        <button id="btnJoin">Join Game</button>
+        <input type="text" id="gameId" placeholder="Game ID" style="display:none;">
+        <button id="btnConnect" style="display:none;">Connect</button>
+        <div class="status disconnected" id="connectionStatus">Disconnected</div>
+      </div>
+      <div id="connectionInstructions" style="margin-top:1rem; font-size:14px; color:var(--muted);">
+        Select "Host Game" to create a new game, or "Join Game" to connect to an existing one.
+      </div>
+    </div>
 
     <canvas id="game" width="900" height="540" aria-label="Pong game area" role="img"></canvas>
 
@@ -71,6 +93,7 @@
     </div>
   </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.0/peerjs.min.js"></script>
 <script>
 (() => {
   const canvas = document.getElementById('game');
@@ -81,6 +104,20 @@
   const btnReset = document.getElementById('btnReset');
   const toast = document.getElementById('toast');
   const toastText = document.getElementById('toastText');
+  const multiplayerSetup = document.getElementById('multiplayerSetup');
+  const btnHost = document.getElementById('btnHost');
+  const btnJoin = document.getElementById('btnJoin');
+  const gameIdInput = document.getElementById('gameId');
+  const btnConnect = document.getElementById('btnConnect');
+  const connectionStatus = document.getElementById('connectionStatus');
+  const connectionInstructions = document.getElementById('connectionInstructions');
+
+  // Multiplayer variables
+  let peer = null;
+  let connection = null;
+  let isHost = false;
+  let isOnline = false;
+  let myGameId = '';
 
   // ==== SOUND: simple multi-voice player for modern FX (option 2) ====
   class MultiAudio {
@@ -132,7 +169,7 @@
 
   let leftScore = 0, rightScore = 0;
   let targetScore = parseInt(targetSel.value, 10);
-  let mode = modeSel.value; // 'cpu' | 'pvp'
+  let mode = modeSel.value; // 'cpu' | 'pvp' | 'online'
   let paused = false;
   let gameOver = false;
   let hitCount = 0; // counts paddle hits to reflect speed-ups
@@ -149,8 +186,19 @@
 
   btnPause.addEventListener('click', () => togglePause());
   btnReset.addEventListener('click', () => reset(true));
-  modeSel.addEventListener('change', () => { mode = modeSel.value; });
+  modeSel.addEventListener('change', () => { 
+    mode = modeSel.value; 
+    multiplayerSetup.style.display = mode === 'online' ? 'block' : 'none';
+    if (mode !== 'online') {
+      disconnectOnline();
+    }
+  });
   targetSel.addEventListener('change', () => { targetScore = parseInt(targetSel.value, 10); reset(true); });
+
+  // Multiplayer event listeners
+  btnHost.addEventListener('click', hostGame);
+  btnJoin.addEventListener('click', showJoinForm);
+  btnConnect.addEventListener('click', joinGame);
 
   function randSign(){ return Math.random() < 0.5 ? -1 : 1; }
 
@@ -209,6 +257,146 @@
     ctx.restore();
   }
 
+  // Multiplayer functions
+  function hostGame() {
+    if (peer) peer.destroy();
+    
+    myGameId = generateGameId();
+    peer = new Peer(myGameId);
+    isHost = true;
+    
+    updateConnectionStatus('connecting', 'Waiting for connection...');
+    connectionInstructions.innerHTML = `Share this Game ID with your friend: <strong>${myGameId}</strong><br>They should select "Join Game" and enter this ID.`;
+    
+    peer.on('open', (id) => {
+      console.log('Peer opened with ID:', id);
+    });
+    
+    peer.on('connection', (conn) => {
+      connection = conn;
+      setupConnection();
+      updateConnectionStatus('connected', 'Connected as Host');
+      connectionInstructions.textContent = 'Connected! You control the left paddle (W/S keys).';
+      isOnline = true;
+      reset(true);
+    });
+    
+    peer.on('error', (err) => {
+      console.error('Peer error:', err);
+      updateConnectionStatus('disconnected', 'Connection failed');
+      connectionInstructions.textContent = 'Connection failed. Please try again.';
+    });
+  }
+  
+  function showJoinForm() {
+    gameIdInput.style.display = 'inline-block';
+    btnConnect.style.display = 'inline-block';
+    connectionInstructions.textContent = 'Enter the Game ID provided by the host and click Connect.';
+  }
+  
+  function joinGame() {
+    const gameId = gameIdInput.value.trim();
+    if (!gameId) return;
+    
+    if (peer) peer.destroy();
+    
+    peer = new Peer();
+    isHost = false;
+    
+    updateConnectionStatus('connecting', 'Connecting...');
+    
+    peer.on('open', (id) => {
+      connection = peer.connect(gameId);
+      setupConnection();
+    });
+    
+    peer.on('error', (err) => {
+      console.error('Peer error:', err);
+      updateConnectionStatus('disconnected', 'Connection failed');
+      connectionInstructions.textContent = 'Failed to connect. Check the Game ID and try again.';
+    });
+  }
+  
+  function setupConnection() {
+    connection.on('open', () => {
+      updateConnectionStatus('connected', isHost ? 'Connected as Host' : 'Connected as Guest');
+      connectionInstructions.textContent = isHost ? 
+        'Connected! You control the left paddle (W/S keys).' : 
+        'Connected! You control the right paddle (↑/↓ keys).';
+      isOnline = true;
+      reset(true);
+    });
+    
+    connection.on('data', (data) => {
+      handleNetworkData(data);
+    });
+    
+    connection.on('close', () => {
+      updateConnectionStatus('disconnected', 'Disconnected');
+      connectionInstructions.textContent = 'Connection lost. Please reconnect.';
+      isOnline = false;
+    });
+  }
+  
+  function handleNetworkData(data) {
+    switch(data.type) {
+      case 'paddle':
+        if (isHost && data.player === 'right') {
+          right.y = data.y;
+        } else if (!isHost && data.player === 'left') {
+          left.y = data.y;
+        }
+        break;
+      case 'gameState':
+        if (!isHost) {
+          ball.x = data.ball.x;
+          ball.y = data.ball.y;
+          ball.vx = data.ball.vx;
+          ball.vy = data.ball.vy;
+          leftScore = data.leftScore;
+          rightScore = data.rightScore;
+          hitCount = data.hitCount;
+        }
+        break;
+      case 'reset':
+        if (!isHost) {
+          leftScore = data.leftScore;
+          rightScore = data.rightScore;
+          hitCount = 0;
+          gameOver = false;
+          paused = false;
+          centerPaddles();
+          serve(data.serveDir);
+        }
+        break;
+    }
+  }
+  
+  function sendNetworkData(data) {
+    if (connection && connection.open) {
+      connection.send(data);
+    }
+  }
+  
+  function updateConnectionStatus(status, text) {
+    connectionStatus.className = `status ${status}`;
+    connectionStatus.textContent = text;
+  }
+  
+  function generateGameId() {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+  }
+  
+  function disconnectOnline() {
+    if (connection) connection.close();
+    if (peer) peer.destroy();
+    connection = null;
+    peer = null;
+    isOnline = false;
+    isHost = false;
+    updateConnectionStatus('disconnected', 'Disconnected');
+  }
+
   function centerPaddles(){
     left.y = (H() - left.h) / 2; left.x = 40 * scale;
     right.y = (H() - right.h) / 2; right.x = W() - right.w - 40 * scale;
@@ -227,17 +415,28 @@
     rightScore = full ? 0 : rightScore;
     hitCount = 0;
     gameOver = false;
-    paused = false; // Reset paused state
+    paused = false;
     left.w = PADDLE_W(); left.h = PADDLE_H(); right.w = PADDLE_W(); right.h = PADDLE_H();
     left.speed = right.speed = 620;
     particles.length = 0;
     centerPaddles();
-    serve(randSign());
-    hideToast(); // Ensure toast is hidden on reset
+    const serveDir = randSign();
+    serve(serveDir);
+    hideToast();
+    
+    // Send reset to other player if online
+    if (isOnline && isHost) {
+      sendNetworkData({
+        type: 'reset',
+        leftScore: leftScore,
+        rightScore: rightScore,
+        serveDir: serveDir
+      });
+    }
   }
 
   function togglePause(){
-    if (gameOver) return; // Don't allow pausing when game is over
+    if (gameOver) return;
     paused = !paused;
     if (paused) {
       showToast('Paused');
@@ -253,7 +452,7 @@
   
   function hideToast(){ 
     toast.classList.remove('show');
-    toastText.textContent = ''; // Clear the text content too
+    toastText.textContent = '';
   }
 
   // CPU logic
@@ -287,7 +486,6 @@
     // Glow circles
     ctx.globalAlpha = 0.08; ctx.beginPath(); ctx.arc(W()/2, H()/2, 180*scale, 0, Math.PI*2); ctx.fill(); ctx.globalAlpha = 1;
 
-    // Particles first (so paddles/ball render top) or last? We'll render beneath the ball but above court
     drawParticles();
 
     // Paddles
@@ -320,7 +518,7 @@
   // Update
   let last = performance.now();
   function loop(t){
-    const dt = Math.min(0.02, (t - last) / 1000); // clamp to 20ms
+    const dt = Math.min(0.02, (t - last) / 1000);
     last = t;
     if (!paused && !gameOver) update(dt);
     draw();
@@ -329,14 +527,34 @@
 
   function update(dt){
     // Input: Left paddle
-    left.dy = (keys.has('w') ? -1 : 0) + (keys.has('s') ? 1 : 0);
-    left.y += left.dy * left.speed * dt;
+    if (!isOnline || isHost) {
+      left.dy = (keys.has('w') ? -1 : 0) + (keys.has('s') ? 1 : 0);
+      left.y += left.dy * left.speed * dt;
+      
+      // Send left paddle position if online
+      if (isOnline && isHost) {
+        sendNetworkData({
+          type: 'paddle',
+          player: 'left',
+          y: left.y
+        });
+      }
+    }
 
-    // Input / CPU: Right paddle
-    if (mode === 'pvp') {
+    // Input / CPU / Network: Right paddle
+    if (mode === 'pvp' || (isOnline && !isHost)) {
       right.dy = (keys.has('arrowup') ? -1 : 0) + (keys.has('arrowdown') ? 1 : 0);
       right.y += right.dy * right.speed * dt;
-    } else {
+      
+      // Send right paddle position if online guest
+      if (isOnline && !isHost) {
+        sendNetworkData({
+          type: 'paddle',
+          player: 'right',
+          y: right.y
+        });
+      }
+    } else if (mode === 'cpu') {
       cpuMove(right, dt);
     }
 
@@ -344,42 +562,53 @@
     left.y = clamp(left.y, 10*scale, H() - left.h - 10*scale);
     right.y = clamp(right.y, 10*scale, H() - right.h - 10*scale);
 
-    // Move ball
-    ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+    // Only host controls ball physics in online mode
+    if (!isOnline || isHost) {
+      // Move ball
+      ball.x += ball.vx * dt; ball.y += ball.vy * dt;
 
-    // Emit continuous trail based on speed and hit count (more hits = denser)
-    const baseEmit = 1 + Math.floor((speedNow() - SPEED_MIN) / 120);
-    const extra = Math.min(12, Math.floor(hitCount * 0.5));
-    if ((performance.now() % 2) < 1) emitParticles(baseEmit + extra); // throttle a bit
+      // Emit continuous trail based on speed and hit count
+      const baseEmit = 1 + Math.floor((speedNow() - SPEED_MIN) / 120);
+      const extra = Math.min(12, Math.floor(hitCount * 0.5));
+      if ((performance.now() % 2) < 1) emitParticles(baseEmit + extra);
 
-    // Wall bounce
-    if (ball.y - ball.r <= 0) { ball.y = ball.r; ball.vy *= -1; SFX.wall.play(); emitParticles(10, 1.2); }
-    if (ball.y + ball.r >= H()) { ball.y = H() - ball.r; ball.vy *= -1; SFX.wall.play(); emitParticles(10, 1.2); }
+      // Wall bounce
+      if (ball.y - ball.r <= 0) { ball.y = ball.r; ball.vy *= -1; SFX.wall.play(); emitParticles(10, 1.2); }
+      if (ball.y + ball.r >= H()) { ball.y = H() - ball.r; ball.vy *= -1; SFX.wall.play(); emitParticles(10, 1.2); }
 
-    // Paddle collisions
-    // Left
-    if (rectCircleCollide(left.x, left.y, left.w, left.h, ball.x, ball.y, ball.r) && ball.vx < 0) {
-      ball.x = left.x + left.w + ball.r;
-      hitPaddle(left);
+      // Paddle collisions
+      if (rectCircleCollide(left.x, left.y, left.w, left.h, ball.x, ball.y, ball.r) && ball.vx < 0) {
+        ball.x = left.x + left.w + ball.r;
+        hitPaddle(left);
+      }
+      if (rectCircleCollide(right.x, right.y, right.w, right.h, ball.x, ball.y, ball.r) && ball.vx > 0) {
+        ball.x = right.x - ball.r;
+        hitPaddle(right);
+      }
+
+      // Score
+      if (ball.x + ball.r < 0) { rightScore++; scorePoint(1); }
+      if (ball.x - ball.r > W()) { leftScore++; scorePoint(-1); }
+      
+      // Send game state if online host
+      if (isOnline && isHost) {
+        sendNetworkData({
+          type: 'gameState',
+          ball: { x: ball.x, y: ball.y, vx: ball.vx, vy: ball.vy },
+          leftScore: leftScore,
+          rightScore: rightScore,
+          hitCount: hitCount
+        });
+      }
     }
-    // Right
-    if (rectCircleCollide(right.x, right.y, right.w, right.h, ball.x, ball.y, ball.r) && ball.vx > 0) {
-      ball.x = right.x - ball.r;
-      hitPaddle(right);
-    }
-
-    // Score
-    if (ball.x + ball.r < 0) { rightScore++; scorePoint(1); }
-    if (ball.x - ball.r > W()) { leftScore++; scorePoint(-1); }
 
     updateParticles(dt);
   }
 
   function hitPaddle(p){
-    // add spin based on impact point
-    const hit = ((ball.y - (p.y + p.h/2)) / (p.h/2)); // -1..1
-    const angle = hit * 0.8; // max ~46deg
-    const sp = Math.hypot(ball.vx, ball.vy) * 1.06 + 16; // accelerate slightly more each hit
+    const hit = ((ball.y - (p.y + p.h/2)) / (p.h/2));
+    const angle = hit * 0.8;
+    const sp = Math.hypot(ball.vx, ball.vy) * 1.06 + 16;
     const dir = (p === left) ? 1 : -1;
     ball.vx = Math.cos(angle) * sp * dir;
     ball.vy = Math.sin(angle) * sp;
@@ -395,12 +624,12 @@
       showToast(`${leftScore>rightScore? 'Left' : 'Right'} player wins!`); 
       return;
     }
-    hitCount = 0; // reset acceleration count
+    hitCount = 0;
     centerPaddles();
-    serve(-lastDir); // serve toward player who was scored on
+    serve(-lastDir);
   }
 
-  // Init - Make sure toast is hidden initially
+  // Init
   hideToast();
   reset(true);
   requestAnimationFrame(loop);
