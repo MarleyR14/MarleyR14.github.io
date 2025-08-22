@@ -273,12 +273,9 @@
     });
     
     peer.on('connection', (conn) => {
+      console.log('Host: Incoming connection received');
       connection = conn;
       setupConnection();
-      updateConnectionStatus('connected', 'Connected as Host');
-      connectionInstructions.textContent = 'Connected! You control the left paddle (W/S keys).';
-      isOnline = true;
-      reset(true);
     });
     
     peer.on('error', (err) => {
@@ -318,7 +315,9 @@
   }
   
   function setupConnection() {
+    console.log('Setting up connection...');
     connection.on('open', () => {
+      console.log('Connection opened!');
       updateConnectionStatus('connected', isHost ? 'Connected as Host' : 'Connected as Guest');
       connectionInstructions.textContent = isHost ? 
         'Connected! You control the left paddle (W/S keys).' : 
@@ -328,12 +327,21 @@
     });
     
     connection.on('data', (data) => {
+      console.log('Received data:', data.type);
       handleNetworkData(data);
     });
     
     connection.on('close', () => {
+      console.log('Connection closed');
       updateConnectionStatus('disconnected', 'Disconnected');
       connectionInstructions.textContent = 'Connection lost. Please reconnect.';
+      isOnline = false;
+    });
+    
+    connection.on('error', (err) => {
+      console.log('Connection error:', err);
+      updateConnectionStatus('disconnected', 'Connection failed');
+      connectionInstructions.textContent = 'Connection error. Please try again.';
       isOnline = false;
     });
   }
@@ -374,7 +382,14 @@
   
   function sendNetworkData(data) {
     if (connection && connection.open) {
-      connection.send(data);
+      try {
+        connection.send(data);
+        console.log('Sent data:', data.type);
+      } catch (err) {
+        console.error('Error sending data:', err);
+      }
+    } else {
+      console.warn('No connection available to send data');
     }
   }
   
