@@ -268,7 +268,10 @@
     peer.on('connection', (conn) => {
       console.log('Host: Incoming connection received');
       connection = conn;
-      setupConnection();
+      // Add small delay to ensure connection is ready
+      setTimeout(() => {
+        setupConnection();
+      }, 500);
     });
     
     peer.on('error', (err) => {
@@ -302,15 +305,18 @@
     
     peer.on('open', (id) => {
       console.log('Peer opened, attempting to connect to:', gameId);
-      connection = peer.connect(gameId);
-      
-      if (!connection) {
-        console.error('Failed to create connection');
-        updateConnectionStatus('disconnected', 'Connection failed');
-        return;
-      }
-      
-      setupConnection();
+      // Add small delay to ensure peer is ready
+      setTimeout(() => {
+        connection = peer.connect(gameId);
+        
+        if (!connection) {
+          console.error('Failed to create connection');
+          updateConnectionStatus('disconnected', 'Connection failed');
+          return;
+        }
+        
+        setupConnection();
+      }, 1000); // Wait 1 second
     });
     
     peer.on('error', (err) => {
