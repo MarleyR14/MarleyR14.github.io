@@ -72,6 +72,7 @@
         <button id="btnJoin">Join Game</button>
         <input type="text" id="gameId" placeholder="Game ID" style="display:none;">
         <button id="btnConnect" style="display:none;">Connect</button>
+        <button id="btnTest" style="display:none;">Test Connection</button>
         <div class="status disconnected" id="connectionStatus">Disconnected</div>
       </div>
       <div id="connectionInstructions" style="margin-top:1rem; font-size:14px; color:var(--muted);">
@@ -122,23 +123,12 @@
   // ==== SOUND: simple multi-voice player for modern FX (option 2) ====
   class MultiAudio {
     constructor(src, voices = 4, volume = 0.7) {
-      this.pool = Array.from({ length: voices }, () => {
-        const a = new Audio(src);
-        a.preload = 'auto';
-        a.volume = volume;
-        return a;
-      });
+      this.pool = [];
       this.i = 0;
+      // Skip loading sounds to avoid errors
     }
     play() {
-      try {
-        const a = this.pool[this.i];
-        this.i = (this.i + 1) % this.pool.length;
-        a.currentTime = 0;
-        a.play();
-      } catch (e) {
-        // ignore autoplay errors; browser may require interaction first
-      }
+      // Skip playing sounds for now
     }
   }
 
@@ -195,10 +185,13 @@
   });
   targetSel.addEventListener('change', () => { targetScore = parseInt(targetSel.value, 10); reset(true); });
 
+  const btnTest = document.getElementById('btnTest');
+  
   // Multiplayer event listeners
   btnHost.addEventListener('click', hostGame);
   btnJoin.addEventListener('click', showJoinForm);
   btnConnect.addEventListener('click', joinGame);
+  btnTest.addEventListener('click', testConnection);
 
   function randSign(){ return Math.random() < 0.5 ? -1 : 1; }
 
@@ -292,8 +285,13 @@
   }
   
   function joinGame() {
-    const gameId = gameIdInput.value.trim();
-    if (!gameId) return;
+    const gameId = gameIdInput.value.trim().toUpperCase();
+    if (!gameId) {
+      alert('Please enter a Game ID');
+      return;
+    }
+    
+    console.log('Attempting to join game:', gameId);
     
     if (peer) peer.destroy();
     
@@ -303,13 +301,21 @@
     updateConnectionStatus('connecting', 'Connecting...');
     
     peer.on('open', (id) => {
+      console.log('Peer opened, attempting to connect to:', gameId);
       connection = peer.connect(gameId);
+      
+      if (!connection) {
+        console.error('Failed to create connection');
+        updateConnectionStatus('disconnected', 'Connection failed');
+        return;
+      }
+      
       setupConnection();
     });
     
     peer.on('error', (err) => {
       console.error('Peer error:', err);
-      updateConnectionStatus('disconnected', 'Connection failed');
+      updateConnectionStatus('disconnected', 'Connection failed: ' + err.type);
       connectionInstructions.textContent = 'Failed to connect. Check the Game ID and try again.';
     });
   }
@@ -322,6 +328,7 @@
       connectionInstructions.textContent = isHost ? 
         'Connected! You control the left paddle (W/S keys).' : 
         'Connected! You control the right paddle (↑/↓ keys).';
+      btnTest.style.display = 'inline-block'; // Show test button
       isOnline = true;
       reset(true);
     });
@@ -335,6 +342,7 @@
       console.log('Connection closed');
       updateConnectionStatus('disconnected', 'Disconnected');
       connectionInstructions.textContent = 'Connection lost. Please reconnect.';
+      btnTest.style.display = 'none';
       isOnline = false;
     });
     
@@ -342,12 +350,29 @@
       console.log('Connection error:', err);
       updateConnectionStatus('disconnected', 'Connection failed');
       connectionInstructions.textContent = 'Connection error. Please try again.';
+      btnTest.style.display = 'none';
       isOnline = false;
     });
   }
   
+  function testConnection() {
+    if (connection && connection.open) {
+      sendNetworkData({
+        type: 'test',
+        message: 'Hello from ' + (isHost ? 'host' : 'guest')
+      });
+      console.log('Test message sent');
+    } else {
+      console.log('No connection to test');
+    }
+  }
+  
   function handleNetworkData(data) {
     switch(data.type) {
+      case 'test':
+        console.log('Received test message:', data.message);
+        alert('Connection working! Received: ' + data.message);
+        break;
       case 'paddle':
         if (isHost && data.player === 'right') {
           right.y = data.y;
